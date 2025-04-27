@@ -33,4 +33,4 @@ target_link_libraries(
 )
 
 include(GoogleTest)
-gtest_discover_tests(VideoDecoderTest)
+gtest_discover_tests(VideoDecoderTest DISCOVERY_TIMEOUT 30)

@@ -2,6 +2,7 @@ import importlib
 import json
 import os
 import pathlib
+import platform
 import sys
 
 from dataclasses import dataclass, field
@@ -36,7 +37,8 @@ def get_ffmpeg_major_version():
 # not guarantee bit-for-bit equality across systems and architectures, so we
 # also cannot. We currently use Linux on x86_64 as our reference system.
 def assert_frames_equal(*args, **kwargs):
-    if sys.platform == "linux":
+    # See https://github.com/pytorch/torchcodec/issues/569#issuecomment-2834723326
+    if sys.platform == "linux" and platform.machine() == "x86_64":
         if args[0].device.type == "cuda":
             atol = 2
             if get_ffmpeg_major_version() == 4:

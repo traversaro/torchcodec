@@ -292,7 +292,8 @@ class TestAudioEncoder:
             # tolerances, the check fails on ~1% of the samples, so that's
             # probably fine. It might be that the FFmpeg CLI doesn't rely on
             # libswresample for converting channels?
-            rtol, atol = 0, 1e-3
+            # See also https://github.com/pytorch/torchcodec/issues/569#issuecomment-3197006256
+            rtol, atol = 0, 1e-2
         else:
             rtol, atol = None, None
         samples_by_us = self.decode(encoded_by_us)

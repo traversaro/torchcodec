@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -295,6 +296,9 @@ class TestAudioEncoder:
             rtol, atol = 0, 1e-3
         else:
             rtol, atol = None, None
+        # Override rtol only for MP3 on Linux ARM64, see https://github.com/pytorch/torchcodec/issues/569#issuecomment-3197006256
+        if format == "mp3" and sys.platform == "linux" and platform.machine() == "aarch64":
+            rtol = 1e-2
         samples_by_us = self.decode(encoded_by_us)
         samples_by_ffmpeg = self.decode(encoded_by_ffmpeg)
         assert_close(

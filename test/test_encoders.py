@@ -155,7 +155,7 @@ class TestAudioEncoder:
         avcodec_open2_failed_msg = "avcodec_open2 failed: Invalid argument"
         with pytest.raises(
             RuntimeError,
-            match=avcodec_open2_failed_msg if IS_WINDOWS else "invalid sample rate=10",
+            match="invalid sample rate=10",
         ):
             getattr(decoder, method)(**valid_params)
 

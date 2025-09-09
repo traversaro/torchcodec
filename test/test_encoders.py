@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -313,6 +314,9 @@ class TestAudioEncoder:
             # probably fine. It might be that the FFmpeg CLI doesn't rely on
             # libswresample for converting channels?
             rtol, atol = 0, 1e-3
+        elif format == "mp3" and sys.platform == "linux" and platform.machine() == "aarch64":
+            # Override rtol only for MP3 on Linux ARM64, see https://github.com/pytorch/torchcodec/issues/569#issuecomment-3197006256
+            rtol, atol = 0, 1e-2
         else:
             rtol, atol = None, None
 

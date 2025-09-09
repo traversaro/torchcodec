@@ -152,7 +152,7 @@ class TestAudioEncoder:
             raise ValueError(f"Unknown method: {method}")
 
         decoder = AudioEncoder(self.decode(NASA_AUDIO_MP3).data, sample_rate=10)
-        avcodec_open2_failed_msg = "avcodec_open2 failed: Invalid argument"
+        avcodec_open2_failed_msg = "invalid sample rate=10"
         with pytest.raises(
             RuntimeError,
             match="invalid sample rate=10",

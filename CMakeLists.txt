@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
+
 project(TorchCodec)
+
+message(FATAL_ERROR "Fake error")
 
 add_subdirectory(src/torchcodec/_core)
 

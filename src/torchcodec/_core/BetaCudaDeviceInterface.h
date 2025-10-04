@@ -52,6 +52,7 @@ class BetaCudaDeviceInterface : public DeviceInterface {
   }
 
   int sendPacket(ReferenceAVPacket& packet) override;
+  int sendEOFPacket() override;
   int receiveFrame(UniqueAVFrame& avFrame) override;
   void flush() override;
 
@@ -61,6 +62,7 @@ class BetaCudaDeviceInterface : public DeviceInterface {
   int frameReadyInDisplayOrder(CUVIDPARSERDISPINFO* dispInfo);
 
  private:
+  int sendCuvidPacket(CUVIDSOURCEDATAPACKET& cuvidPacket);
   // Apply bitstream filter, modifies packet in-place
   void applyBSF(ReferenceAVPacket& packet);
   void initializeBSF(

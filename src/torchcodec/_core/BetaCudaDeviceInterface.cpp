@@ -150,11 +150,24 @@ cudaVideoCodec validateCodecSupport(AVCodecID codecId) {
       return cudaVideoCodec_HEVC;
     case AV_CODEC_ID_AV1:
       return cudaVideoCodec_AV1;
-    // TODONVDEC P0: support more codecs
-    // case AV_CODEC_ID_MPEG4: return cudaVideoCodec_MPEG4;
-    // case AV_CODEC_ID_VP8: return cudaVideoCodec_VP8;
-    // case AV_CODEC_ID_VP9: return cudaVideoCodec_VP9;
-    // case AV_CODEC_ID_MJPEG: return cudaVideoCodec_JPEG;
+    case AV_CODEC_ID_VP9:
+      return cudaVideoCodec_VP9;
+    case AV_CODEC_ID_VP8:
+      return cudaVideoCodec_VP8;
+    case AV_CODEC_ID_MPEG4:
+      return cudaVideoCodec_MPEG4;
+    // Formats below are currently not tested, but they should "mostly" work.
+    // MPEG1 was briefly locally tested and it was ok-ish despite duration being
+    // off. Since they're far less popular, we keep them disabled by default but
+    // we can consider enabling them upon user requests.
+    // case AV_CODEC_ID_MPEG1VIDEO:
+    //   return cudaVideoCodec_MPEG1;
+    // case AV_CODEC_ID_MPEG2VIDEO:
+    //   return cudaVideoCodec_MPEG2;
+    // case AV_CODEC_ID_MJPEG:
+    //   return cudaVideoCodec_JPEG;
+    // case AV_CODEC_ID_VC1:
+    //   return cudaVideoCodec_VC1;
     default: {
       TORCH_CHECK(false, "Unsupported codec type: ", avcodec_get_name(codecId));
     }
@@ -270,10 +283,17 @@ void BetaCudaDeviceInterface::initializeBSF(
       }
       break;
     }
+    case AV_CODEC_ID_MPEG4: {
+      const std::string formatName =
+          avFormatCtx->iformat->name ? avFormatCtx->iformat->name : "";
+      if (formatName == "avi") {
+        filterName = "mpeg4_unpack_bframes";
+      }
+      break;
+    }
 
     default:
       // No bitstream filter needed for other codecs
-      // TODONVDEC P1 MPEG4 will need one!
       break;
   }
 
@@ -512,19 +532,15 @@ UniqueAVFrame BetaCudaDeviceInterface::convertCudaFrameToAVFrame(
   avFrame->format = AV_PIX_FMT_CUDA;
   avFrame->pts = dispInfo.timestamp;
 
-  // TODONVDEC P2: We compute the duration based on average frame rate info:
-  // either from NVCUVID if it's valid, otherwise from FFmpeg as fallback. But
-  // both of these are based on average frame rate, so if the video has
-  // variable frame rate, the durations may be off. We should try to see if we
-  // can set the duration more accurately. Unfortunately it's not given by
-  // dispInfo. One option would be to set it based on the pts difference between
-  // consecutive frames, if the next frame is already available.
-  int frameRateNum = static_cast<int>(videoFormat_.frame_rate.numerator);
-  int frameRateDen = static_cast<int>(videoFormat_.frame_rate.denominator);
-  AVRational frameRate = (frameRateNum > 0 && frameRateDen > 0)
-      ? AVRational{frameRateNum, frameRateDen}
-      : frameRateAvgFromFFmpeg_;
-  setDuration(avFrame, computeSafeDuration(frameRate, timeBase_));
+  // TODONVDEC P2: We compute the duration based on average frame rate info, so
+  // so if the video has variable frame rate, the durations may be off. We
+  // should try to see if we can set the duration more accurately. Unfortunately
+  // it's not given by dispInfo. One option would be to set it based on the pts
+  // difference between consecutive frames, if the next frame is already
+  // available.
+  // Note that we used to rely on videoFormat_.frame_rate for this, but that
+  // proved less accurate than FFmpeg.
+  setDuration(avFrame, computeSafeDuration(frameRateAvgFromFFmpeg_, timeBase_));
 
   // We need to assign the frame colorspace. This is crucial for proper color
   // conversion. NVCUVID stores that in the matrix_coefficients field, but

@@ -717,3 +717,40 @@ TEST_SRC_2_720P_H265 = TestVideo(
     },
     frames={0: {}},  # Not needed for now
 )
+
+# ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=1 -c:v libvpx-vp9 -b:v 1M output_vp9.webm
+TEST_SRC_2_720P_VP9 = TestVideo(
+    filename="testsrc2_vp9.webm",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+# ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=1 -c:v libvpx -b:v 1M output_vp8.webm
+TEST_SRC_2_720P_VP8 = TestVideo(
+    filename="testsrc2_vp8.webm",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+# ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=1 -c:v mpeg4 -q:v 5 output_mpeg4.avi
+TEST_SRC_2_720P_MPEG4 = TestVideo(
+    filename="testsrc2_mpeg4.avi",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+
+def supports_approximate_mode(asset: TestVideo) -> bool:
+    # TODONVDEC P2: open an issue about his. That's actually not related to
+    # NVDEC at all, those don't support approximate mode because they don't set
+    # a duration. CPU decoder fails too!
+    return asset not in (AV1_VIDEO, TEST_SRC_2_720P_VP9, TEST_SRC_2_720P_VP8)

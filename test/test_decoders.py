@@ -43,8 +43,12 @@ from .utils import (
     SINE_MONO_S32,
     SINE_MONO_S32_44100,
     SINE_MONO_S32_8000,
+    supports_approximate_mode,
     TEST_SRC_2_720P,
     TEST_SRC_2_720P_H265,
+    TEST_SRC_2_720P_MPEG4,
+    TEST_SRC_2_720P_VP8,
+    TEST_SRC_2_720P_VP9,
     unsplit_device_str,
 )
 
@@ -588,7 +592,7 @@ class TestVideoDecoder:
             return
 
         if device == "cuda" and in_fbcode():
-            pytest.skip("AV1 decoding on CUDA is not supported internally")
+            pytest.skip("decoding on CUDA is not supported internally")
 
         decoder = VideoDecoder(AV1_VIDEO.path, device=device)
         device, _ = unsplit_device_str(device)
@@ -1432,15 +1436,20 @@ class TestVideoDecoder:
         decoder.get_frames_played_at(torch.tensor([0, 1], dtype=torch.int))
         decoder.get_frames_played_at(torch.tensor([0, 1], dtype=torch.float))
 
-    # TODONVDEC P1 unskip equality assertion checks on FFMpeg4. The comparison
-    # checks are failing on very few pixels, e.g.:
+    # TODONVDEC P1:
+    # - unskip equality assertion checks on FFMpeg4. The comparison
+    #   checks are failing on very few pixels, e.g.:
     #
-    # E   Mismatched elements: 648586 / 82944000 (0.8%)
-    # E   Greatest absolute difference: 164 at index (20, 2, 27, 96)
-    # E   Greatest relative difference: inf at index (5, 1, 112, 186)
+    #   E   Mismatched elements: 648586 / 82944000 (0.8%)
+    #   E   Greatest absolute difference: 164 at index (20, 2, 27, 96)
+    #   E   Greatest relative difference: inf at index (5, 1, 112, 186)
     #
-    # So we're skipping them to unblock for now, but we should call
-    # assert_tensor_close_on_at_least or something like that.
+    #   So we're skipping them to unblock for now, but we should call
+    #   assert_tensor_close_on_at_least or something like that.
+    # - unskip equality assertion checks for MPEG4 asset. The frames are decoded
+    #   fine, it's the color conversion that's different. The frame from the
+    #   BETA interface is assumed to be 701 while the one from the default
+    #   interface is 601.
 
     @needs_cuda
     @pytest.mark.parametrize(
@@ -1451,6 +1460,9 @@ class TestVideoDecoder:
             BT709_FULL_RANGE,
             TEST_SRC_2_720P_H265,
             AV1_VIDEO,
+            TEST_SRC_2_720P_VP9,
+            TEST_SRC_2_720P_VP8,
+            TEST_SRC_2_720P_MPEG4,
         ),
     )
     @pytest.mark.parametrize("contiguous_indices", (True, False))
@@ -1458,8 +1470,8 @@ class TestVideoDecoder:
     def test_beta_cuda_interface_get_frame_at(
         self, asset, contiguous_indices, seek_mode
     ):
-        if asset == AV1_VIDEO and seek_mode == "approximate":
-            pytest.skip("AV1 asset doesn't work with approximate mode")
+        if seek_mode == "approximate" and not supports_approximate_mode(asset):
+            pytest.skip("asset doesn't work with approximate mode")
 
         ref_decoder = VideoDecoder(asset.path, device="cuda", seek_mode=seek_mode)
         beta_decoder = VideoDecoder(
@@ -1476,7 +1488,8 @@ class TestVideoDecoder:
         for frame_index in indices:
             ref_frame = ref_decoder.get_frame_at(frame_index)
             beta_frame = beta_decoder.get_frame_at(frame_index)
-            if get_ffmpeg_major_version() > 4:  # TODONVDEC P1 see above
+            # TODONVDEC P1 see above
+            if get_ffmpeg_major_version() > 4 and asset is not TEST_SRC_2_720P_MPEG4:
                 torch.testing.assert_close(
                     beta_frame.data, ref_frame.data, rtol=0, atol=0
                 )
@@ -1493,6 +1506,9 @@ class TestVideoDecoder:
             BT709_FULL_RANGE,
             TEST_SRC_2_720P_H265,
             AV1_VIDEO,
+            TEST_SRC_2_720P_VP9,
+            TEST_SRC_2_720P_VP8,
+            TEST_SRC_2_720P_MPEG4,
         ),
     )
     @pytest.mark.parametrize("contiguous_indices", (True, False))
@@ -1500,8 +1516,8 @@ class TestVideoDecoder:
     def test_beta_cuda_interface_get_frames_at(
         self, asset, contiguous_indices, seek_mode
     ):
-        if asset == AV1_VIDEO and seek_mode == "approximate":
-            pytest.skip("AV1 asset doesn't work with approximate mode")
+        if seek_mode == "approximate" and not supports_approximate_mode(asset):
+            pytest.skip("asset doesn't work with approximate mode")
 
         ref_decoder = VideoDecoder(asset.path, device="cuda", seek_mode=seek_mode)
         beta_decoder = VideoDecoder(
@@ -1518,7 +1534,8 @@ class TestVideoDecoder:
 
         ref_frames = ref_decoder.get_frames_at(indices)
         beta_frames = beta_decoder.get_frames_at(indices)
-        if get_ffmpeg_major_version() > 4:  # TODONVDEC P1 see above
+        # TODONVDEC P1 see above
+        if get_ffmpeg_major_version() > 4 and asset is not TEST_SRC_2_720P_MPEG4:
             torch.testing.assert_close(
                 beta_frames.data, ref_frames.data, rtol=0, atol=0
             )
@@ -1536,12 +1553,15 @@ class TestVideoDecoder:
             BT709_FULL_RANGE,
             TEST_SRC_2_720P_H265,
             AV1_VIDEO,
+            TEST_SRC_2_720P_VP9,
+            TEST_SRC_2_720P_VP8,
+            TEST_SRC_2_720P_MPEG4,
         ),
     )
     @pytest.mark.parametrize("seek_mode", ("exact", "approximate"))
     def test_beta_cuda_interface_get_frame_played_at(self, asset, seek_mode):
-        if asset == AV1_VIDEO and seek_mode == "approximate":
-            pytest.skip("AV1 asset doesn't work with approximate mode")
+        if seek_mode == "approximate" and not supports_approximate_mode(asset):
+            pytest.skip("asset doesn't work with approximate mode")
 
         ref_decoder = VideoDecoder(asset.path, device="cuda", seek_mode=seek_mode)
         beta_decoder = VideoDecoder(
@@ -1556,7 +1576,8 @@ class TestVideoDecoder:
         for pts in timestamps:
             ref_frame = ref_decoder.get_frame_played_at(pts)
             beta_frame = beta_decoder.get_frame_played_at(pts)
-            if get_ffmpeg_major_version() > 4:  # TODONVDEC P1 see above
+            # TODONVDEC P1 see above
+            if get_ffmpeg_major_version() > 4 and asset is not TEST_SRC_2_720P_MPEG4:
                 torch.testing.assert_close(
                     beta_frame.data, ref_frame.data, rtol=0, atol=0
                 )
@@ -1573,12 +1594,15 @@ class TestVideoDecoder:
             BT709_FULL_RANGE,
             TEST_SRC_2_720P_H265,
             AV1_VIDEO,
+            TEST_SRC_2_720P_VP9,
+            TEST_SRC_2_720P_VP8,
+            TEST_SRC_2_720P_MPEG4,
         ),
     )
     @pytest.mark.parametrize("seek_mode", ("exact", "approximate"))
     def test_beta_cuda_interface_get_frames_played_at(self, asset, seek_mode):
-        if asset == AV1_VIDEO and seek_mode == "approximate":
-            pytest.skip("AV1 asset doesn't work with approximate mode")
+        if seek_mode == "approximate" and not supports_approximate_mode(asset):
+            pytest.skip("asset doesn't work with approximate mode")
 
         ref_decoder = VideoDecoder(asset.path, device="cuda", seek_mode=seek_mode)
         beta_decoder = VideoDecoder(
@@ -1593,7 +1617,8 @@ class TestVideoDecoder:
 
         ref_frames = ref_decoder.get_frames_played_at(timestamps)
         beta_frames = beta_decoder.get_frames_played_at(timestamps)
-        if get_ffmpeg_major_version() > 4:  # TODONVDEC P1 see above
+        # TODONVDEC P1 see above
+        if get_ffmpeg_major_version() > 4 and asset is not TEST_SRC_2_720P_MPEG4:
             torch.testing.assert_close(
                 beta_frames.data, ref_frames.data, rtol=0, atol=0
             )
@@ -1611,12 +1636,15 @@ class TestVideoDecoder:
             BT709_FULL_RANGE,
             TEST_SRC_2_720P_H265,
             AV1_VIDEO,
+            TEST_SRC_2_720P_VP9,
+            TEST_SRC_2_720P_VP8,
+            TEST_SRC_2_720P_MPEG4,
         ),
     )
     @pytest.mark.parametrize("seek_mode", ("exact", "approximate"))
     def test_beta_cuda_interface_backwards(self, asset, seek_mode):
-        if asset == AV1_VIDEO and seek_mode == "approximate":
-            pytest.skip("AV1 asset doesn't work with approximate mode")
+        if seek_mode == "approximate" and not supports_approximate_mode(asset):
+            pytest.skip("asset doesn't work with approximate mode")
 
         ref_decoder = VideoDecoder(asset.path, device="cuda", seek_mode=seek_mode)
         beta_decoder = VideoDecoder(
@@ -1635,7 +1663,8 @@ class TestVideoDecoder:
 
             ref_frame = ref_decoder.get_frame_at(frame_index)
             beta_frame = beta_decoder.get_frame_at(frame_index)
-            if get_ffmpeg_major_version() > 4:  # TODONVDEC P1 see above
+            # TODONVDEC P1 see above
+            if get_ffmpeg_major_version() > 4 and asset is not TEST_SRC_2_720P_MPEG4:
                 torch.testing.assert_close(
                     beta_frame.data, ref_frame.data, rtol=0, atol=0
                 )

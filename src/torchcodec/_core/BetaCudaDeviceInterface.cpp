@@ -137,6 +137,24 @@ static UniqueCUvideodecoder createDecoder(CUVIDEOFORMAT* videoFormat) {
   return UniqueCUvideodecoder(decoder, CUvideoDecoderDeleter{});
 }
 
+cudaVideoCodec validateCodecSupport(AVCodecID codecId) {
+  switch (codecId) {
+    case AV_CODEC_ID_H264:
+      return cudaVideoCodec_H264;
+    case AV_CODEC_ID_HEVC:
+      return cudaVideoCodec_HEVC;
+    // TODONVDEC P0: support more codecs
+    // case AV_CODEC_ID_AV1: return cudaVideoCodec_AV1;
+    // case AV_CODEC_ID_MPEG4: return cudaVideoCodec_MPEG4;
+    // case AV_CODEC_ID_VP8: return cudaVideoCodec_VP8;
+    // case AV_CODEC_ID_VP9: return cudaVideoCodec_VP9;
+    // case AV_CODEC_ID_MJPEG: return cudaVideoCodec_JPEG;
+    default: {
+      TORCH_CHECK(false, "Unsupported codec type: ", avcodec_get_name(codecId));
+    }
+  }
+}
+
 } // namespace
 
 BetaCudaDeviceInterface::BetaCudaDeviceInterface(const torch::Device& device)
@@ -162,61 +180,30 @@ BetaCudaDeviceInterface::~BetaCudaDeviceInterface() {
   }
 }
 
-void BetaCudaDeviceInterface::initialize(const AVStream* avStream) {
+void BetaCudaDeviceInterface::initialize(
+    const AVStream* avStream,
+    const UniqueDecodingAVFormatContext& avFormatCtx) {
   torch::Tensor dummyTensorForCudaInitialization = torch::empty(
       {1}, torch::TensorOptions().dtype(torch::kUInt8).device(device_));
-
-  TORCH_CHECK(avStream != nullptr, "AVStream cannot be null");
-  timeBase_ = avStream->time_base;
 
   auto cudaDevice = torch::Device(torch::kCUDA);
   defaultCudaInterface_ =
       std::unique_ptr<DeviceInterface>(createDeviceInterface(cudaDevice));
   AVCodecContext dummyCodecContext = {};
-  defaultCudaInterface_->initialize(avStream);
+  defaultCudaInterface_->initialize(avStream, avFormatCtx);
   defaultCudaInterface_->registerHardwareDeviceWithCodec(&dummyCodecContext);
 
-  const AVCodecParameters* codecpar = avStream->codecpar;
-  TORCH_CHECK(codecpar != nullptr, "CodecParameters cannot be null");
+  TORCH_CHECK(avStream != nullptr, "AVStream cannot be null");
+  timeBase_ = avStream->time_base;
 
-  TORCH_CHECK(
-      // TODONVDEC P0 support more
-      avStream->codecpar->codec_id == AV_CODEC_ID_H264,
-      "Can only do H264 for now");
+  const AVCodecParameters* codecPar = avStream->codecpar;
+  TORCH_CHECK(codecPar != nullptr, "CodecParameters cannot be null");
 
-  // Setup bit stream filters (BSF):
-  // https://ffmpeg.org/doxygen/7.0/group__lavc__bsf.html
-  // This is only needed for some formats, like H264 or HEVC.  TODONVDEC P1: For
-  // now we apply BSF unconditionally, but it should be optional  and dependent
-  // on codec and container.
-  const AVBitStreamFilter* avBSF = av_bsf_get_by_name("h264_mp4toannexb");
-  TORCH_CHECK(
-      avBSF != nullptr, "Failed to find h264_mp4toannexb bitstream filter");
-
-  AVBSFContext* avBSFContext = nullptr;
-  int retVal = av_bsf_alloc(avBSF, &avBSFContext);
-  TORCH_CHECK(
-      retVal >= AVSUCCESS,
-      "Failed to allocate bitstream filter: ",
-      getFFMPEGErrorStringFromErrorCode(retVal));
-
-  bitstreamFilter_.reset(avBSFContext);
-
-  retVal = avcodec_parameters_copy(bitstreamFilter_->par_in, codecpar);
-  TORCH_CHECK(
-      retVal >= AVSUCCESS,
-      "Failed to copy codec parameters: ",
-      getFFMPEGErrorStringFromErrorCode(retVal));
-
-  retVal = av_bsf_init(bitstreamFilter_.get());
-  TORCH_CHECK(
-      retVal == AVSUCCESS,
-      "Failed to initialize bitstream filter: ",
-      getFFMPEGErrorStringFromErrorCode(retVal));
+  initializeBSF(codecPar, avFormatCtx);
 
   // Create parser. Default values that aren't obvious are taken from DALI.
   CUVIDPARSERPARAMS parserParams = {};
-  parserParams.CodecType = cudaVideoCodec_H264;
+  parserParams.CodecType = validateCodecSupport(codecPar->codec_id);
   parserParams.ulMaxNumDecodeSurfaces = 8;
   parserParams.ulMaxDisplayDelay = 0;
   // Callback setup, all are triggered by the parser within a call
@@ -229,6 +216,85 @@ void BetaCudaDeviceInterface::initialize(const AVStream* avStream) {
   CUresult result = cuvidCreateVideoParser(&videoParser_, &parserParams);
   TORCH_CHECK(
       result == CUDA_SUCCESS, "Failed to create video parser: ", result);
+}
+
+void BetaCudaDeviceInterface::initializeBSF(
+    const AVCodecParameters* codecPar,
+    const UniqueDecodingAVFormatContext& avFormatCtx) {
+  // Setup bit stream filters (BSF):
+  // https://ffmpeg.org/doxygen/7.0/group__lavc__bsf.html
+  // This is only needed for some formats, like H264 or HEVC.
+
+  TORCH_CHECK(codecPar != nullptr, "codecPar cannot be null");
+  TORCH_CHECK(avFormatCtx != nullptr, "AVFormatContext cannot be null");
+  TORCH_CHECK(
+      avFormatCtx->iformat != nullptr,
+      "AVFormatContext->iformat cannot be null");
+  std::string filterName;
+
+  // Matching logic is taken from DALI
+  switch (codecPar->codec_id) {
+    case AV_CODEC_ID_H264: {
+      const std::string formatName = avFormatCtx->iformat->long_name
+          ? avFormatCtx->iformat->long_name
+          : "";
+
+      if (formatName == "QuickTime / MOV" ||
+          formatName == "FLV (Flash Video)" ||
+          formatName == "Matroska / WebM" || formatName == "raw H.264 video") {
+        filterName = "h264_mp4toannexb";
+      }
+      break;
+    }
+
+    case AV_CODEC_ID_HEVC: {
+      const std::string formatName = avFormatCtx->iformat->long_name
+          ? avFormatCtx->iformat->long_name
+          : "";
+
+      if (formatName == "QuickTime / MOV" ||
+          formatName == "FLV (Flash Video)" ||
+          formatName == "Matroska / WebM" || formatName == "raw HEVC video") {
+        filterName = "hevc_mp4toannexb";
+      }
+      break;
+    }
+
+    default:
+      // No bitstream filter needed for other codecs
+      // TODONVDEC P1 MPEG4 will need one!
+      break;
+  }
+
+  if (filterName.empty()) {
+    // Only initialize BSF if we actually need one
+    return;
+  }
+
+  const AVBitStreamFilter* avBSF = av_bsf_get_by_name(filterName.c_str());
+  TORCH_CHECK(
+      avBSF != nullptr, "Failed to find bitstream filter: ", filterName);
+
+  AVBSFContext* avBSFContext = nullptr;
+  int retVal = av_bsf_alloc(avBSF, &avBSFContext);
+  TORCH_CHECK(
+      retVal >= AVSUCCESS,
+      "Failed to allocate bitstream filter: ",
+      getFFMPEGErrorStringFromErrorCode(retVal));
+
+  bitstreamFilter_.reset(avBSFContext);
+
+  retVal = avcodec_parameters_copy(bitstreamFilter_->par_in, codecPar);
+  TORCH_CHECK(
+      retVal >= AVSUCCESS,
+      "Failed to copy codec parameters: ",
+      getFFMPEGErrorStringFromErrorCode(retVal));
+
+  retVal = av_bsf_init(bitstreamFilter_.get());
+  TORCH_CHECK(
+      retVal == AVSUCCESS,
+      "Failed to initialize bitstream filter: ",
+      getFFMPEGErrorStringFromErrorCode(retVal));
 }
 
 // This callback is called by the parser within cuvidParseVideoData when there

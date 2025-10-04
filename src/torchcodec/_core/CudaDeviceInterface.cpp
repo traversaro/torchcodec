@@ -203,14 +203,16 @@ CudaDeviceInterface::~CudaDeviceInterface() {
   }
 }
 
-void CudaDeviceInterface::initialize(const AVStream* avStream) {
+void CudaDeviceInterface::initialize(
+    const AVStream* avStream,
+    const UniqueDecodingAVFormatContext& avFormatCtx) {
   TORCH_CHECK(avStream != nullptr, "avStream is null");
   timeBase_ = avStream->time_base;
 
   cpuInterface_ = createDeviceInterface(torch::kCPU);
   TORCH_CHECK(
       cpuInterface_ != nullptr, "Failed to create CPU device interface");
-  cpuInterface_->initialize(avStream);
+  cpuInterface_->initialize(avStream, avFormatCtx);
   cpuInterface_->initializeVideo(
       VideoStreamOptions(),
       {},

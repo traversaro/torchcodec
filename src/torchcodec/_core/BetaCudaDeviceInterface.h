@@ -37,7 +37,9 @@ class BetaCudaDeviceInterface : public DeviceInterface {
   explicit BetaCudaDeviceInterface(const torch::Device& device);
   virtual ~BetaCudaDeviceInterface();
 
-  void initialize(const AVStream* avStream) override;
+  void initialize(
+      const AVStream* avStream,
+      const UniqueDecodingAVFormatContext& avFormatCtx) override;
 
   void convertAVFrameToFrameOutput(
       UniqueAVFrame& avFrame,
@@ -61,6 +63,9 @@ class BetaCudaDeviceInterface : public DeviceInterface {
  private:
   // Apply bitstream filter, modifies packet in-place
   void applyBSF(ReferenceAVPacket& packet);
+  void initializeBSF(
+      const AVCodecParameters* codecPar,
+      const UniqueDecodingAVFormatContext& avFormatCtx);
 
   UniqueAVFrame convertCudaFrameToAVFrame(
       CUdeviceptr framePtr,

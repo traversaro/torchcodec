@@ -52,7 +52,9 @@ class DeviceInterface {
   };
 
   // Initialize the device with parameters generic to all kinds of decoding.
-  virtual void initialize(const AVStream* avStream) = 0;
+  virtual void initialize(
+      const AVStream* avStream,
+      const UniqueDecodingAVFormatContext& avFormatCtx) = 0;
 
   // Initialize the device with parameters specific to video decoding. There is
   // a default empty implementation.

@@ -439,7 +439,7 @@ void SingleStreamDecoder::addStream(
   TORCH_CHECK(
       deviceInterface_ != nullptr,
       "Failed to create device interface. This should never happen, please report.");
-  deviceInterface_->initialize(streamInfo.stream);
+  deviceInterface_->initialize(streamInfo.stream, formatContext_);
 
   // TODO_CODE_QUALITY it's pretty meh to have a video-specific logic within
   // addStream() which is supposed to be generic

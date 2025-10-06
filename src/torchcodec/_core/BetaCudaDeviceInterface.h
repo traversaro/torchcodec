@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include "src/torchcodec/_core/CUDACommon.h"
 #include "src/torchcodec/_core/Cache.h"
 #include "src/torchcodec/_core/DeviceInterface.h"
 #include "src/torchcodec/_core/FFMPEGCommon.h"
@@ -94,10 +95,8 @@ class BetaCudaDeviceInterface : public DeviceInterface {
 
   UniqueAVBSFContext bitstreamFilter_;
 
-  // Default CUDA interface for color conversion.
-  // TODONVDEC P2: we shouldn't need to keep a separate instance of the default.
-  // See other TODO there about how interfaces should be completely independent.
-  std::unique_ptr<DeviceInterface> defaultCudaInterface_;
+  // NPP context for color conversion
+  UniqueNppContext nppCtx_;
 };
 
 } // namespace facebook::torchcodec

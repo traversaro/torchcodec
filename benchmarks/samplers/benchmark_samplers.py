@@ -3,7 +3,7 @@ from pathlib import Path
 from time import perf_counter_ns
 
 import torch
-from torchcodec.decoders import VideoDecoder
+from torchcodec.decoders import VideoDecoderdsa
 from torchcodec.samplers import (
     clips_at_random_indices,
     clips_at_random_timestamps,

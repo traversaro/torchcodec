@@ -8,6 +8,11 @@
 
 #include <c10/util/Exception.h>
 
+extern "C" {
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+}
+
 namespace facebook::torchcodec {
 
 AutoAVPacket::AutoAVPacket() : avPacket_(av_packet_alloc()) {
@@ -54,6 +59,77 @@ int64_t getDuration(const UniqueAVFrame& avFrame) {
 #else
   return avFrame->duration;
 #endif
+}
+
+void setDuration(const UniqueAVFrame& avFrame, int64_t duration) {
+#if LIBAVUTIL_VERSION_MAJOR < 58
+  avFrame->pkt_duration = duration;
+#else
+  avFrame->duration = duration;
+#endif
+}
+
+const int* getSupportedSampleRates(const AVCodec& avCodec) {
+  const int* supportedSampleRates = nullptr;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100) // FFmpeg >= 7.1
+  int numSampleRates = 0;
+  int ret = avcodec_get_supported_config(
+      nullptr,
+      &avCodec,
+      AV_CODEC_CONFIG_SAMPLE_RATE,
+      0,
+      reinterpret_cast<const void**>(&supportedSampleRates),
+      &numSampleRates);
+  if (ret < 0 || supportedSampleRates == nullptr) {
+    // Return nullptr to skip validation in validateSampleRate.
+    return nullptr;
+  }
+#else
+  supportedSampleRates = avCodec.supported_samplerates;
+#endif
+  return supportedSampleRates;
+}
+
+const AVPixelFormat* getSupportedPixelFormats(const AVCodec& avCodec) {
+  const AVPixelFormat* supportedPixelFormats = nullptr;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100) // FFmpeg >= 7.1
+  int numPixelFormats = 0;
+  int ret = avcodec_get_supported_config(
+      nullptr,
+      &avCodec,
+      AV_CODEC_CONFIG_PIX_FORMAT,
+      0,
+      reinterpret_cast<const void**>(&supportedPixelFormats),
+      &numPixelFormats);
+  if (ret < 0 || supportedPixelFormats == nullptr) {
+    TORCH_CHECK(false, "Couldn't get supported pixel formats from encoder.");
+  }
+#else
+  supportedPixelFormats = avCodec.pix_fmts;
+#endif
+  return supportedPixelFormats;
+}
+
+const AVSampleFormat* getSupportedOutputSampleFormats(const AVCodec& avCodec) {
+  const AVSampleFormat* supportedSampleFormats = nullptr;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100) // FFmpeg >= 7.1
+  int numSampleFormats = 0;
+  int ret = avcodec_get_supported_config(
+      nullptr,
+      &avCodec,
+      AV_CODEC_CONFIG_SAMPLE_FORMAT,
+      0,
+      reinterpret_cast<const void**>(&supportedSampleFormats),
+      &numSampleFormats);
+  if (ret < 0 || supportedSampleFormats == nullptr) {
+    // Return nullptr to use default output format in
+    // findBestOutputSampleFormat.
+    return nullptr;
+  }
+#else
+  supportedSampleFormats = avCodec.sample_fmts;
+#endif
+  return supportedSampleFormats;
 }
 
 int getNumChannels(const UniqueAVFrame& avFrame) {
@@ -109,7 +185,32 @@ void setDefaultChannelLayout(UniqueAVFrame& avFrame, int numChannels) {
 }
 
 void validateNumChannels(const AVCodec& avCodec, int numChannels) {
-#if LIBAVFILTER_VERSION_MAJOR > 7 // FFmpeg > 4
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100) // FFmpeg >= 7.1
+  std::stringstream supportedNumChannels;
+  const AVChannelLayout* supportedLayouts = nullptr;
+  int numLayouts = 0;
+  int ret = avcodec_get_supported_config(
+      nullptr,
+      &avCodec,
+      AV_CODEC_CONFIG_CHANNEL_LAYOUT,
+      0,
+      reinterpret_cast<const void**>(&supportedLayouts),
+      &numLayouts);
+  if (ret < 0 || supportedLayouts == nullptr) {
+    // If we can't validate, we must assume it'll be fine. If not, FFmpeg will
+    // eventually raise.
+    return;
+  }
+  for (int i = 0; i < numLayouts; ++i) {
+    if (i > 0) {
+      supportedNumChannels << ", ";
+    }
+    supportedNumChannels << supportedLayouts[i].nb_channels;
+    if (numChannels == supportedLayouts[i].nb_channels) {
+      return;
+    }
+  }
+#elif LIBAVFILTER_VERSION_MAJOR > 7 // FFmpeg > 4
   if (avCodec.ch_layouts == nullptr) {
     // If we can't validate, we must assume it'll be fine. If not, FFmpeg will
     // eventually raise.
@@ -131,7 +232,7 @@ void validateNumChannels(const AVCodec& avCodec, int numChannels) {
     }
     supportedNumChannels << avCodec.ch_layouts[i].nb_channels;
   }
-#else
+#else // FFmpeg <= 4
   if (avCodec.channel_layouts == nullptr) {
     // can't validate, same as above.
     return;
@@ -298,6 +399,70 @@ SwrContext* createSwrContext(
   return swrContext;
 }
 
+AVFilterContext* createBuffersinkFilter(
+    AVFilterGraph* filterGraph,
+    enum AVPixelFormat outputFormat) {
+  const AVFilter* buffersink = avfilter_get_by_name("buffersink");
+  TORCH_CHECK(buffersink != nullptr, "Failed to get buffersink filter.");
+
+  AVFilterContext* sinkContext = nullptr;
+  int status;
+  const char* filterName = "out";
+
+  enum AVPixelFormat pix_fmts[] = {outputFormat, AV_PIX_FMT_NONE};
+
+// av_opt_set_int_list was replaced by av_opt_set_array() in FFmpeg 8.
+#if LIBAVUTIL_VERSION_MAJOR >= 60 // FFmpeg >= 8
+  // Output options like pixel_formats must be set before filter init
+  sinkContext =
+      avfilter_graph_alloc_filter(filterGraph, buffersink, filterName);
+  TORCH_CHECK(
+      sinkContext != nullptr, "Failed to allocate buffersink filter context.");
+
+  // When setting pix_fmts, only the first element is used, so nb_elems = 1
+  // AV_PIX_FMT_NONE acts as a terminator for the array in av_opt_set_int_list
+  status = av_opt_set_array(
+      sinkContext,
+      "pixel_formats",
+      AV_OPT_SEARCH_CHILDREN,
+      0, // start_elem
+      1, // nb_elems
+      AV_OPT_TYPE_PIXEL_FMT,
+      pix_fmts);
+  TORCH_CHECK(
+      status >= 0,
+      "Failed to set pixel format for buffersink filter: ",
+      getFFMPEGErrorStringFromErrorCode(status));
+
+  status = avfilter_init_str(sinkContext, nullptr);
+  TORCH_CHECK(
+      status >= 0,
+      "Failed to initialize buffersink filter: ",
+      getFFMPEGErrorStringFromErrorCode(status));
+#else // FFmpeg <= 7
+  // For older FFmpeg versions, create filter and then set options
+  status = avfilter_graph_create_filter(
+      &sinkContext, buffersink, filterName, nullptr, nullptr, filterGraph);
+  TORCH_CHECK(
+      status >= 0,
+      "Failed to create buffersink filter: ",
+      getFFMPEGErrorStringFromErrorCode(status));
+
+  status = av_opt_set_int_list(
+      sinkContext,
+      "pix_fmts",
+      pix_fmts,
+      AV_PIX_FMT_NONE,
+      AV_OPT_SEARCH_CHILDREN);
+  TORCH_CHECK(
+      status >= 0,
+      "Failed to set pixel formats for buffersink filter: ",
+      getFFMPEGErrorStringFromErrorCode(status));
+#endif
+
+  return sinkContext;
+}
+
 UniqueAVFrame convertAudioAVFrameSamples(
     const UniqueSwrContext& swrContext,
     const UniqueAVFrame& srcAVFrame,
@@ -416,6 +581,28 @@ AVIOContext* avioAllocContext(
       reinterpret_cast<AVIOWriteFunctionOld>(write_packet),
 #endif
       seek);
+}
+
+double ptsToSeconds(int64_t pts, const AVRational& timeBase) {
+  // To perform the multiplication before the division, av_q2d is not used
+  return static_cast<double>(pts) * timeBase.num / timeBase.den;
+}
+
+int64_t secondsToClosestPts(double seconds, const AVRational& timeBase) {
+  return static_cast<int64_t>(
+      std::round(seconds * timeBase.den / timeBase.num));
+}
+
+int64_t computeSafeDuration(
+    const AVRational& frameRate,
+    const AVRational& timeBase) {
+  if (frameRate.num <= 0 || frameRate.den <= 0 || timeBase.num <= 0 ||
+      timeBase.den <= 0) {
+    return 0;
+  } else {
+    return (static_cast<int64_t>(frameRate.den) * timeBase.den) /
+        (static_cast<int64_t>(timeBase.num) * frameRate.num);
+  }
 }
 
 } // namespace facebook::torchcodec

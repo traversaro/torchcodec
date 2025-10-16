@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from torchcodec._core import get_ffmpeg_library_versions
+from torchcodec.decoders import set_cuda_backend, VideoDecoder
 from torchcodec.decoders._video_decoder import _read_custom_frame_mappings
 
 IS_WINDOWS = sys.platform in ("win32", "cygwin")
@@ -26,8 +27,53 @@ def needs_cuda(test_item):
     return pytest.mark.needs_cuda(test_item)
 
 
+# This is a special device string that we use to test the "beta" CUDA backend.
+# It only exists here, in this test utils file. Public and core APIs have no
+# idea that this is how we're tesing them. That is, that's not a supported
+# `device` parameter for the VideoDecoder or for the _core APIs.
+# Tests using all_supported_devices() will get this device string, and the test
+# need to clean it up by calling either make_video_decoder for VideoDecoder, or
+# unsplit_device_str for core APIs.
+_CUDA_BETA_DEVICE_STR = "cuda:beta"
+
+
 def all_supported_devices():
-    return ("cpu", pytest.param("cuda", marks=pytest.mark.needs_cuda))
+    return (
+        "cpu",
+        pytest.param("cuda", marks=pytest.mark.needs_cuda),
+        pytest.param(_CUDA_BETA_DEVICE_STR, marks=pytest.mark.needs_cuda),
+    )
+
+
+def unsplit_device_str(device_str: str) -> str:
+    # helper meant to be used as
+    # device, device_variant = unsplit_device_str(device)
+    # when `device` comes from all_supported_devices() and may be _CUDA_BETA_DEVICE_STR.
+    # It is used:
+    # - before calling `.to(device)` where device can't be _CUDA_BETA_DEVICE_STR.
+    # - before calling add_video_stream(device=device, device_variant=device_variant)
+    if device_str == _CUDA_BETA_DEVICE_STR:
+        return "cuda", "beta"
+    else:
+        return device_str, "ffmpeg"
+
+
+def make_video_decoder(*args, **kwargs) -> tuple[VideoDecoder, str]:
+    # Helper to create a VideoDecoder with the right cuda backend if needed.
+    # kwargs is expected to have a "device" key which comes from
+    # all_supported_devices(), and can be _CUDA_BETA_DEVICE_STR.
+    device = kwargs.pop("device", "cpu")
+    if device == _CUDA_BETA_DEVICE_STR:
+        clean_device, backend = "cuda", "beta"
+    else:
+        clean_device, backend = device, "ffmpeg"
+
+    # set_cuda_backend is a no-op if the device is "cpu", so we can use it
+    # unconditionally.
+    with set_cuda_backend(backend):
+        dec = VideoDecoder(*args, **kwargs, device=clean_device)
+
+    return dec, clean_device
 
 
 def get_ffmpeg_major_version():
@@ -73,7 +119,7 @@ def psnr(a, b, max_val=255) -> float:
 def assert_frames_equal(*args, **kwargs):
     if sys.platform == "linux":
         if args[0].device.type == "cuda":
-            atol = 2
+            atol = 3 if cuda_version_used_for_building_torch() >= (13, 0) else 2
             if get_ffmpeg_major_version() == 4:
                 assert_tensor_close_on_at_least(
                     args[0], args[1], percentage=95, atol=atol
@@ -678,3 +724,59 @@ BT709_FULL_RANGE = TestVideo(
     },
     frames={0: {}},  # Not needed for now
 )
+
+# ffmpeg -f lavfi -i testsrc2=duration=2:size=1280x720:rate=30 -c:v libx264 -profile:v baseline -level 3.1 -pix_fmt yuv420p -b:v 2500k -r 30 -movflags +faststart output_720p_2s.mp4
+TEST_SRC_2_720P = TestVideo(
+    filename="testsrc2.mp4",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+# ffmpeg -f lavfi -i testsrc2=duration=10:size=1280x720:rate=30 -c:v libx265 -crf 23 -preset medium output.mp4
+TEST_SRC_2_720P_H265 = TestVideo(
+    filename="testsrc2_h265.mp4",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+# ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=1 -c:v libvpx-vp9 -b:v 1M output_vp9.webm
+TEST_SRC_2_720P_VP9 = TestVideo(
+    filename="testsrc2_vp9.webm",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+# ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=1 -c:v libvpx -b:v 1M output_vp8.webm
+TEST_SRC_2_720P_VP8 = TestVideo(
+    filename="testsrc2_vp8.webm",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+# ffmpeg -f lavfi -i testsrc2=size=1280x720:rate=30:duration=1 -c:v mpeg4 -q:v 5 output_mpeg4.avi
+TEST_SRC_2_720P_MPEG4 = TestVideo(
+    filename="testsrc2_mpeg4.avi",
+    default_stream_index=0,
+    stream_infos={
+        0: TestVideoStreamInfo(width=1280, height=720, num_color_channels=3),
+    },
+    frames={0: {}},  # Not needed for now
+)
+
+
+def supports_approximate_mode(asset: TestVideo) -> bool:
+    # Those are missing the `duration` field so they fail in approximate mode (on all devices).
+    # TODO: we should address this, see
+    # https://github.com/meta-pytorch/torchcodec/issues/945
+    return asset not in (AV1_VIDEO, TEST_SRC_2_720P_VP9, TEST_SRC_2_720P_VP8)

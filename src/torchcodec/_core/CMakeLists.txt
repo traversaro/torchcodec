@@ -95,10 +95,11 @@ function(make_torchcodec_libraries
         SingleStreamDecoder.cpp
         Encoder.cpp
         ValidationUtils.cpp
+        Transform.cpp
     )
 
     if(ENABLE_CUDA)
-	    list(APPEND core_sources CudaDeviceInterface.cpp)
+	    list(APPEND core_sources CudaDeviceInterface.cpp BetaCudaDeviceInterface.cpp NVDECCache.cpp CUDACommon.cpp)
     endif()
 
     set(core_library_dependencies
@@ -107,9 +108,27 @@ function(make_torchcodec_libraries
     )
 
     if(ENABLE_CUDA)
+        # Try to find NVCUVID. Try the normal way first. This should work locally.
+        find_library(NVCUVID_LIBRARY NAMES nvcuvid)
+        # If not found, try with version suffix, or hardcoded path. Appears
+        # to be necessary on the CI.
+        if(NOT NVCUVID_LIBRARY)
+            find_library(NVCUVID_LIBRARY NAMES nvcuvid.1 PATHS /usr/lib64 /usr/lib)
+        endif()
+        if(NOT NVCUVID_LIBRARY)
+            set(NVCUVID_LIBRARY "/usr/lib64/libnvcuvid.so.1")
+        endif()
+
+        if(NVCUVID_LIBRARY)
+            message(STATUS "Found NVCUVID: ${NVCUVID_LIBRARY}")
+        else()
+            message(FATAL_ERROR "Could not find NVCUVID library")
+        endif()
+
         list(APPEND core_library_dependencies
             ${CUDA_nppi_LIBRARY}
             ${CUDA_nppicc_LIBRARY}
+            ${NVCUVID_LIBRARY}
         )
     endif()
 
@@ -175,9 +194,20 @@ function(make_torchcodec_libraries
     # stray initialization of py::objects. The rest of the object code must
     # match. See:
     #   https://pybind11.readthedocs.io/en/stable/faq.html#someclass-declared-with-greater-visibility-than-the-type-of-its-field-someclass-member-wattributes
-    if(NOT WIN32)
+    # We have to do this for both pybind_ops and custom_ops because they include
+    # some of the same headers.
+    #
+    # Note that this is Linux only. It's not necessary on Windows, and on Mac
+    # hiding visibility can actually break dyanmic casts across share libraries
+    # because the type infos don't get exported.
+    if(LINUX)
         target_compile_options(
             ${pybind_ops_library_name}
+            PUBLIC
+            "-fvisibility=hidden"
+        )
+        target_compile_options(
+            ${custom_ops_library_name}
             PUBLIC
             "-fvisibility=hidden"
         )
@@ -233,11 +263,12 @@ if(DEFINED ENV{BUILD_AGAINST_ALL_FFMPEG_FROM_S3})
         you still need a different FFmpeg to be installed for run time!"
     )
 
-    # This will expose the ffmpeg4, ffmpeg5, ffmpeg6, and ffmpeg7 targets
+    # This will expose the ffmpeg4, ffmpeg5, ffmpeg6, ffmpeg7, and ffmpeg8 targets
     include(
         ${CMAKE_CURRENT_SOURCE_DIR}/fetch_and_expose_non_gpl_ffmpeg_libs.cmake
     )
 
+    make_torchcodec_libraries(8 ffmpeg8)
     make_torchcodec_libraries(7 ffmpeg7)
     make_torchcodec_libraries(6 ffmpeg6)
     make_torchcodec_libraries(4 ffmpeg4)
@@ -274,6 +305,8 @@ else()
         set(ffmpeg_major_version "6")
     elseif (${libavcodec_major_version} STREQUAL "61")
         set(ffmpeg_major_version "7")
+    elseif (${libavcodec_major_version} STREQUAL "62")
+        set(ffmpeg_major_version "8")
     else()
         message(
             FATAL_ERROR

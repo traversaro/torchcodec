@@ -5,6 +5,7 @@
 // LICENSE file in the root directory of this source tree.
 
 #include "src/torchcodec/_core/FilterGraph.h"
+#include "src/torchcodec/_core/FFMPEGCommon.h"
 
 extern "C" {
 #include <libavfilter/buffersink.h>
@@ -22,7 +23,8 @@ FiltersContext::FiltersContext(
     int outputHeight,
     AVPixelFormat outputFormat,
     const std::string& filtergraphStr,
-    AVRational timeBase)
+    AVRational timeBase,
+    AVBufferRef* hwFramesCtx)
     : inputWidth(inputWidth),
       inputHeight(inputHeight),
       inputFormat(inputFormat),
@@ -31,7 +33,8 @@ FiltersContext::FiltersContext(
       outputHeight(outputHeight),
       outputFormat(outputFormat),
       filtergraphStr(filtergraphStr),
-      timeBase(timeBase) {}
+      timeBase(timeBase),
+      hwFramesCtx(hwFramesCtx) {}
 
 bool operator==(const AVRational& lhs, const AVRational& rhs) {
   return lhs.num == rhs.num && lhs.den == rhs.den;
@@ -61,7 +64,6 @@ FilterGraph::FilterGraph(
   }
 
   const AVFilter* buffersrc = avfilter_get_by_name("buffer");
-  const AVFilter* buffersink = avfilter_get_by_name("buffersink");
 
   UniqueAVBufferSrcParameters srcParams(av_buffersrc_parameters_alloc());
   TORCH_CHECK(srcParams, "Failed to allocate buffersrc params");
@@ -91,26 +93,10 @@ FilterGraph::FilterGraph(
       "Failed to create filter graph : ",
       getFFMPEGErrorStringFromErrorCode(status));
 
-  status = avfilter_graph_create_filter(
-      &sinkContext_, buffersink, "out", nullptr, nullptr, filterGraph_.get());
+  sinkContext_ =
+      createBuffersinkFilter(filterGraph_.get(), filtersContext.outputFormat);
   TORCH_CHECK(
-      status >= 0,
-      "Failed to create filter graph: ",
-      getFFMPEGErrorStringFromErrorCode(status));
-
-  enum AVPixelFormat pix_fmts[] = {
-      filtersContext.outputFormat, AV_PIX_FMT_NONE};
-
-  status = av_opt_set_int_list(
-      sinkContext_,
-      "pix_fmts",
-      pix_fmts,
-      AV_PIX_FMT_NONE,
-      AV_OPT_SEARCH_CHILDREN);
-  TORCH_CHECK(
-      status >= 0,
-      "Failed to set output pixel formats: ",
-      getFFMPEGErrorStringFromErrorCode(status));
+      sinkContext_ != nullptr, "Failed to create and configure buffersink");
 
   UniqueAVFilterInOut outputs(avfilter_inout_alloc());
   UniqueAVFilterInOut inputs(avfilter_inout_alloc());
@@ -137,7 +123,8 @@ FilterGraph::FilterGraph(
   TORCH_CHECK(
       status >= 0,
       "Failed to parse filter description: ",
-      getFFMPEGErrorStringFromErrorCode(status));
+      getFFMPEGErrorStringFromErrorCode(status),
+      ", provided filters: " + filtersContext.filtergraphStr);
 
   status = avfilter_graph_config(filterGraph_.get(), nullptr);
   TORCH_CHECK(

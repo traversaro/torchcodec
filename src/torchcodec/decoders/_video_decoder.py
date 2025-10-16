@@ -15,6 +15,7 @@ from torch import device as torch_device, Tensor
 
 from torchcodec import _core as core, Frame, FrameBatch
 from torchcodec.decoders._decoder_utils import (
+    _get_cuda_backend,
     create_decoder,
     ERROR_REPORTING_INSTRUCTIONS,
 )
@@ -55,6 +56,8 @@ class VideoDecoder:
             Passing 0 lets FFmpeg decide on the number of threads.
             Default: 1.
         device (str or torch.device, optional): The device to use for decoding. Default: "cpu".
+            If you pass a CUDA device, we recommend trying the "beta" CUDA
+            backend which is faster! See :func:`~torchcodec.decoders.set_cuda_backend`.
         seek_mode (str, optional): Determines if frame access will be "exact" or
             "approximate". Exact guarantees that requesting frame i will always
             return frame i, but doing so requires an initial :term:`scan` of the
@@ -82,6 +85,8 @@ class VideoDecoder:
                 }
 
             Alternative field names "pkt_pts" and "pkt_duration" are also supported.
+            Read more about this parameter in:
+            :ref:`sphx_glr_generated_examples_decoding_custom_frame_mappings.py`
 
     Attributes:
         metadata (VideoStreamMetadata): Metadata of the video stream.
@@ -141,12 +146,15 @@ class VideoDecoder:
         if isinstance(device, torch_device):
             device = str(device)
 
+        device_variant = _get_cuda_backend()
+
         core.add_video_stream(
             self._decoder,
             stream_index=stream_index,
             dimension_order=dimension_order,
             num_threads=num_ffmpeg_threads,
             device=device,
+            device_variant=device_variant,
             custom_frame_mappings=custom_frame_mappings_data,
         )
 
@@ -238,24 +246,20 @@ class VideoDecoder:
             duration_seconds=duration_seconds.item(),
         )
 
-    def get_frames_at(self, indices: list[int]) -> FrameBatch:
+    def get_frames_at(self, indices: Union[torch.Tensor, list[int]]) -> FrameBatch:
         """Return frames at the given indices.
 
         Args:
-            indices (list of int): The indices of the frames to retrieve.
+            indices (torch.Tensor or list of int): The indices of the frames to retrieve.
 
         Returns:
             FrameBatch: The frames at the given indices.
         """
-        if isinstance(indices, torch.Tensor):
-            # TODO we should avoid converting tensors to lists and just let the
-            # core ops and C++ code natively accept tensors.  See
-            # https://github.com/pytorch/torchcodec/issues/879
-            indices = indices.to(torch.int).tolist()
 
         data, pts_seconds, duration_seconds = core.get_frames_at_indices(
             self._decoder, frame_indices=indices
         )
+
         return FrameBatch(
             data=data,
             pts_seconds=pts_seconds,
@@ -319,20 +323,17 @@ class VideoDecoder:
             duration_seconds=duration_seconds.item(),
         )
 
-    def get_frames_played_at(self, seconds: list[float]) -> FrameBatch:
+    def get_frames_played_at(
+        self, seconds: Union[torch.Tensor, list[float]]
+    ) -> FrameBatch:
         """Return frames played at the given timestamps in seconds.
 
         Args:
-            seconds (list of float): The timestamps in seconds when the frames are played.
+            seconds (torch.Tensor or list of float): The timestamps in seconds when the frames are played.
 
         Returns:
             FrameBatch: The frames that are played at ``seconds``.
         """
-        if isinstance(seconds, torch.Tensor):
-            # TODO we should avoid converting tensors to lists and just let the
-            # core ops and C++ code natively accept tensors.  See
-            # https://github.com/pytorch/torchcodec/issues/879
-            seconds = seconds.to(torch.float).tolist()
 
         data, pts_seconds, duration_seconds = core.get_frames_by_pts(
             self._decoder, timestamps=seconds
@@ -475,11 +476,15 @@ def _read_custom_frame_mappings(
             "Invalid custom frame mappings. The 'pts'/'pkt_pts', 'duration'/'pkt_duration', and 'key_frame' keys are required in the frame metadata."
         )
 
-    frame_data = [
-        (float(frame[pts_key]), frame["key_frame"], float(frame[duration_key]))
-        for frame in input_data["frames"]
-    ]
-    all_frames, is_key_frame, duration = map(torch.tensor, zip(*frame_data))
+    all_frames = torch.tensor(
+        [int(frame[pts_key]) for frame in input_data["frames"]], dtype=torch.int64
+    )
+    is_key_frame = torch.tensor(
+        [int(frame["key_frame"]) for frame in input_data["frames"]], dtype=torch.bool
+    )
+    duration = torch.tensor(
+        [int(frame[duration_key]) for frame in input_data["frames"]], dtype=torch.int64
+    )
     if not (len(all_frames) == len(is_key_frame) == len(duration)):
         raise ValueError("Mismatched lengths in frame index data")
     return all_frames, is_key_frame, duration

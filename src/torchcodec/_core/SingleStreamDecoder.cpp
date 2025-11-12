@@ -626,9 +626,17 @@ FrameOutput SingleStreamDecoder::getFrameAtIndexInternal(
   }
   validateFrameIndex(streamMetadata, frameIndex);
 
-  int64_t pts = getPts(frameIndex);
-  setCursorPtsInSeconds(ptsToSeconds(pts, streamInfo.timeBase));
-  return getNextFrameInternal(preAllocatedOutputTensor);
+  // Only set cursor if we're not decoding sequentially: when decoding
+  // sequentially, we don't need to seek anywhere, so by *not* setting the
+  // cursor we allow canWeAvoidSeeking() to return true early.
+  if (frameIndex != lastDecodedFrameIndex_ + 1) {
+    int64_t pts = getPts(frameIndex);
+    setCursorPtsInSeconds(ptsToSeconds(pts, streamInfo.timeBase));
+  }
+
+  auto result = getNextFrameInternal(preAllocatedOutputTensor);
+  lastDecodedFrameIndex_ = frameIndex;
+  return result;
 }
 
 FrameBatchOutput SingleStreamDecoder::getFramesAtIndices(

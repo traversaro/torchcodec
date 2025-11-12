@@ -1105,7 +1105,11 @@ bool SingleStreamDecoder::canWeAvoidSeeking() const {
     // within getFramesPlayedInRangeAudio(), when setCursorPtsInSeconds() was
     // called. For more context, see [Audio Decoding Design]
     return !cursorWasJustSet_;
+  } else if (!cursorWasJustSet_) {
+    // For videos, when decoding consecutive frames, we don't need to seek.
+    return true;
   }
+
   if (cursor_ < lastDecodedAvFramePts_) {
     // We can never skip a seek if we are seeking backwards.
     return false;
@@ -1181,10 +1185,8 @@ UniqueAVFrame SingleStreamDecoder::decodeAVFrame(
 
   resetDecodeStats();
 
-  if (cursorWasJustSet_) {
-    maybeSeekToBeforeDesiredPts();
-    cursorWasJustSet_ = false;
-  }
+  maybeSeekToBeforeDesiredPts();
+  cursorWasJustSet_ = false;
 
   UniqueAVFrame avFrame(av_frame_alloc());
   AutoAVPacket autoAVPacket;

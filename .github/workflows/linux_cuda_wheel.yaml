@@ -100,28 +100,26 @@ jobs:
         run: |
           # Note: xorg-libxau was addded to fix a problem with ffmpeg 4. We should consider removing it.
           conda install libnpp cuda-nvrtc=${{ matrix.cuda-version }} cuda-toolkit=${{ matrix.cuda-version }} cuda-cudart=${{ matrix.cuda-version }} cuda-driver-dev=${{ matrix.cuda-version }} ffmpeg=${{ matrix.ffmpeg-version-for-tests }} xorg-libxau
-          echo "CONDA_PREFIX=${CONDA_PREFIX}" >> "${GITHUB_ENV}"
-          echo "CONDA_RUN=$(which conda) run -p ${CONDA_PREFIX} --no-capture-output" >> "${GITHUB_ENV}"
       - name: Check env
         run: |
-          ${CONDA_RUN} env
-          ${CONDA_RUN} conda info
-          ${CONDA_RUN} nvidia-smi
-          ${CONDA_RUN} conda list
+          env
+          conda info
+          nvidia-smi
+          conda list
       - name: Assert ffmpeg exists
         run: |
-          ${CONDA_RUN} ffmpeg -buildconf
+           ffmpeg -buildconf
       - name: Update pip
         run: ${CONDA_RUN} python -m pip install --upgrade pip
       - name: Install PyTorch
         run: |
-          ${CONDA_RUN} python -m pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu${{ env.cuda_version_without_periods }}
-          ${CONDA_RUN} python -c 'import torch; print(f"{torch.__version__}"); print(f"{torch.__file__}"); print(f"{torch.cuda.is_available()=}")'
+          conda run python -m pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu${{ env.cuda_version_without_periods }}
+          conda run python -c 'import torch; print(f"{torch.__version__}"); print(f"{torch.__file__}"); print(f"{torch.cuda.is_available()=}")'
       - name: Install torchcodec from the wheel
         run: |
           wheel_path=`find pytorch/torchcodec/dist -type f -name "*cu${{ env.cuda_version_without_periods }}-cp${{ env.python_version_without_periods }}*.whl"`
           echo Installing $wheel_path
-          ${CONDA_RUN} python -m pip install $wheel_path -vvv
+          python -m pip install $wheel_path -vvv
 
       - name: Check out repo
         uses: actions/checkout@v3
@@ -129,7 +127,7 @@ jobs:
       - name: Install test dependencies
         run: |
           # Ideally we would find a way to get those dependencies from pyproject.toml
-          ${CONDA_RUN} python -m pip install numpy pytest pillow
+          python -m pip install numpy pytest pillow
 
       - name: Delete the src/ folder just for fun
         run: |
@@ -147,7 +145,7 @@ jobs:
           ls
       - name: Run Python tests
         run: |
-          ${CONDA_RUN} FAIL_WITHOUT_CUDA=1 pytest --override-ini="addopts=-v" test --tb=short
+          FAIL_WITHOUT_CUDA=1 pytest --override-ini="addopts=-v" test --tb=short
       - name: Run Python benchmark
         run: |
-          ${CONDA_RUN} time python benchmarks/decoders/gpu_benchmark.py --devices=cuda:0,cpu --resize_devices=none
+          time python benchmarks/decoders/gpu_benchmark.py --devices=cuda:0,cpu --resize_devices=none

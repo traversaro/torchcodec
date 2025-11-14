@@ -96,9 +96,10 @@ jobs:
           # https://conda-forge.org/docs/user/transitioning_from_defaults/
           miniforge-version: latest
           python-version: ${{ matrix.python-version }}
-          # We install conda packages at the start because otherwise conda may have conflicts with dependencies.
+      - name: Install dependencies
+        run: |
           # Note: xorg-libxau was addded to fix a problem with ffmpeg 4. We should consider removing it.
-          default-packages: "libnpp cuda-nvrtc=${{ matrix.cuda-version }} cuda-toolkit=${{ matrix.cuda-version }} cuda-cudart=${{ matrix.cuda-version }} cuda-driver-dev=${{ matrix.cuda-version }} ffmpeg=${{ matrix.ffmpeg-version-for-tests }} xorg-libxau"
+          conda install libnpp cuda-nvrtc=${{ matrix.cuda-version }} cuda-toolkit=${{ matrix.cuda-version }} cuda-cudart=${{ matrix.cuda-version }} cuda-driver-dev=${{ matrix.cuda-version }} ffmpeg=${{ matrix.ffmpeg-version-for-tests }} xorg-libxau
       - name: Check env
         run: |
           ${CONDA_RUN} env

@@ -100,6 +100,8 @@ jobs:
         run: |
           # Note: xorg-libxau was addded to fix a problem with ffmpeg 4. We should consider removing it.
           conda install libnpp cuda-nvrtc=${{ matrix.cuda-version }} cuda-toolkit=${{ matrix.cuda-version }} cuda-cudart=${{ matrix.cuda-version }} cuda-driver-dev=${{ matrix.cuda-version }} ffmpeg=${{ matrix.ffmpeg-version-for-tests }} xorg-libxau
+          echo "CONDA_PREFIX=${CONDA_PREFIX}" >> "${GITHUB_ENV}"
+          echo "CONDA_RUN=$(which conda) run -p ${CONDA_PREFIX} --no-capture-output" >> "${GITHUB_ENV}"
       - name: Check env
         run: |
           ${CONDA_RUN} env

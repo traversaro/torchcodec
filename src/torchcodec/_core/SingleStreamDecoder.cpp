@@ -100,6 +100,26 @@ void SingleStreamDecoder::initializeDecoder() {
       "Failed to find stream info: ",
       getFFMPEGErrorStringFromErrorCode(status));
 
+  if (formatContext_->duration > 0) {
+    AVRational defaultTimeBase{1, AV_TIME_BASE};
+    containerMetadata_.durationSecondsFromHeader =
+        ptsToSeconds(formatContext_->duration, defaultTimeBase);
+  }
+
+  if (formatContext_->bit_rate > 0) {
+    containerMetadata_.bitRate = formatContext_->bit_rate;
+  }
+
+  int bestVideoStream = getBestStreamIndex(AVMEDIA_TYPE_VIDEO);
+  if (bestVideoStream >= 0) {
+    containerMetadata_.bestVideoStreamIndex = bestVideoStream;
+  }
+
+  int bestAudioStream = getBestStreamIndex(AVMEDIA_TYPE_AUDIO);
+  if (bestAudioStream >= 0) {
+    containerMetadata_.bestAudioStreamIndex = bestAudioStream;
+  }
+
   for (unsigned int i = 0; i < formatContext_->nb_streams; i++) {
     AVStream* avStream = formatContext_->streams[i];
     StreamMetadata streamMetadata;
@@ -157,27 +177,10 @@ void SingleStreamDecoder::initializeDecoder() {
       containerMetadata_.numAudioStreams++;
     }
 
+    streamMetadata.durationSecondsFromContainer =
+        containerMetadata_.durationSecondsFromHeader;
+
     containerMetadata_.allStreamMetadata.push_back(streamMetadata);
-  }
-
-  if (formatContext_->duration > 0) {
-    AVRational defaultTimeBase{1, AV_TIME_BASE};
-    containerMetadata_.durationSecondsFromHeader =
-        ptsToSeconds(formatContext_->duration, defaultTimeBase);
-  }
-
-  if (formatContext_->bit_rate > 0) {
-    containerMetadata_.bitRate = formatContext_->bit_rate;
-  }
-
-  int bestVideoStream = getBestStreamIndex(AVMEDIA_TYPE_VIDEO);
-  if (bestVideoStream >= 0) {
-    containerMetadata_.bestVideoStreamIndex = bestVideoStream;
-  }
-
-  int bestAudioStream = getBestStreamIndex(AVMEDIA_TYPE_AUDIO);
-  if (bestAudioStream >= 0) {
-    containerMetadata_.bestAudioStreamIndex = bestAudioStream;
   }
 
   if (seekMode_ == SeekMode::exact) {

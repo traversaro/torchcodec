@@ -29,6 +29,7 @@ from .utils import (
     BT709_FULL_RANGE,
     cuda_version_used_for_building_torch,
     get_ffmpeg_major_version,
+    get_python_version,
     H264_10BITS,
     H265_10BITS,
     H265_VIDEO,
@@ -39,12 +40,12 @@ from .utils import (
     NASA_AUDIO_MP3_44100,
     NASA_VIDEO,
     needs_cuda,
+    needs_ffmpeg_cli,
     psnr,
     SINE_MONO_S16,
     SINE_MONO_S32,
     SINE_MONO_S32_44100,
     SINE_MONO_S32_8000,
-    supports_approximate_mode,
     TEST_SRC_2_720P,
     TEST_SRC_2_720P_H265,
     TEST_SRC_2_720P_MPEG4,
@@ -116,17 +117,17 @@ class TestDecoder:
             Decoder(123)
 
         # stream index that does not exist
-        with pytest.raises(ValueError, match="No valid stream found"):
+        with pytest.raises(ValueError, match="40 is not a valid stream"):
             Decoder(NASA_VIDEO.path, stream_index=40)
 
         # stream index that does exist, but it's not audio or video
-        with pytest.raises(ValueError, match="No valid stream found"):
+        with pytest.raises(ValueError, match=r"not (a|an) (video|audio) stream"):
             Decoder(NASA_VIDEO.path, stream_index=2)
 
         # user mistakenly forgets to specify binary reading when creating a file
         # like object from open()
         with pytest.raises(TypeError, match="binary reading?"):
-            Decoder(open(NASA_VIDEO.path, "r"))
+            Decoder(open(NASA_VIDEO.path))
 
 
 class TestVideoDecoder:
@@ -1147,6 +1148,10 @@ class TestVideoDecoder:
 
     # TODO investigate why this fails internally.
     @pytest.mark.skipif(in_fbcode(), reason="Compile test fails internally.")
+    @pytest.mark.skipif(
+        get_python_version() >= (3, 14),
+        reason="torch.compile is not supported on Python 3.14+",
+    )
     @pytest.mark.parametrize("device", all_supported_devices())
     def test_compile(self, device):
         decoder, device = make_video_decoder(NASA_VIDEO.path, device=device)
@@ -1312,10 +1317,7 @@ class TestVideoDecoder:
             # Return the custom frame mappings as a JSON string
             return custom_frame_mappings
 
-    @pytest.mark.skipif(
-        in_fbcode(),
-        reason="ffprobe not available internally",
-    )
+    @needs_ffmpeg_cli
     @pytest.mark.parametrize("device", all_supported_devices())
     @pytest.mark.parametrize("stream_index", [0, 3])
     @pytest.mark.parametrize(
@@ -1332,7 +1334,7 @@ class TestVideoDecoder:
         # Optionally open the custom frame mappings file if it is a file path
         # or use a null context if it is a string.
         with (
-            open(custom_frame_mappings, "r")
+            open(custom_frame_mappings)
             if hasattr(custom_frame_mappings, "read")
             else contextlib.nullcontext()
         ) as custom_frame_mappings:
@@ -1362,10 +1364,7 @@ class TestVideoDecoder:
             ),
         )
 
-    @pytest.mark.skipif(
-        in_fbcode(),
-        reason="ffprobe not available internally",
-    )
+    @needs_ffmpeg_cli
     @pytest.mark.parametrize("device", all_supported_devices())
     @pytest.mark.parametrize(
         "custom_frame_mappings,expected_match",
@@ -1407,7 +1406,7 @@ class TestVideoDecoder:
             f.write("invalid input")
 
         # Test both file object and string
-        with open(invalid_json_path, "r") as file_obj:
+        with open(invalid_json_path) as file_obj:
             for custom_frame_mappings in [
                 file_obj,
                 file_obj.read(),
@@ -1465,8 +1464,6 @@ class TestVideoDecoder:
     def test_beta_cuda_interface_get_frame_at(
         self, asset, contiguous_indices, seek_mode
     ):
-        if seek_mode == "approximate" and not supports_approximate_mode(asset):
-            pytest.skip("asset doesn't work with approximate mode")
 
         if in_fbcode() and asset is AV1_VIDEO:
             pytest.skip("AV1 CUDA not supported internally")
@@ -1513,8 +1510,6 @@ class TestVideoDecoder:
     def test_beta_cuda_interface_get_frames_at(
         self, asset, contiguous_indices, seek_mode
     ):
-        if seek_mode == "approximate" and not supports_approximate_mode(asset):
-            pytest.skip("asset doesn't work with approximate mode")
         if in_fbcode() and asset is AV1_VIDEO:
             pytest.skip("AV1 CUDA not supported internally")
 
@@ -1558,8 +1553,6 @@ class TestVideoDecoder:
     )
     @pytest.mark.parametrize("seek_mode", ("exact", "approximate"))
     def test_beta_cuda_interface_get_frame_played_at(self, asset, seek_mode):
-        if seek_mode == "approximate" and not supports_approximate_mode(asset):
-            pytest.skip("asset doesn't work with approximate mode")
         if in_fbcode() and asset is AV1_VIDEO:
             pytest.skip("AV1 CUDA not supported internally")
 
@@ -1600,8 +1593,6 @@ class TestVideoDecoder:
     )
     @pytest.mark.parametrize("seek_mode", ("exact", "approximate"))
     def test_beta_cuda_interface_get_frames_played_at(self, asset, seek_mode):
-        if seek_mode == "approximate" and not supports_approximate_mode(asset):
-            pytest.skip("asset doesn't work with approximate mode")
         if in_fbcode() and asset is AV1_VIDEO:
             pytest.skip("AV1 CUDA not supported internally")
 
@@ -1643,8 +1634,6 @@ class TestVideoDecoder:
     )
     @pytest.mark.parametrize("seek_mode", ("exact", "approximate"))
     def test_beta_cuda_interface_backwards(self, asset, seek_mode):
-        if seek_mode == "approximate" and not supports_approximate_mode(asset):
-            pytest.skip("asset doesn't work with approximate mode")
         if in_fbcode() and asset is AV1_VIDEO:
             pytest.skip("AV1 CUDA not supported internally")
 

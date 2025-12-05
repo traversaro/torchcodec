@@ -4,9 +4,9 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+
 import io
 from pathlib import Path
-from typing import Optional, Union
 
 import torch
 from torch import Tensor
@@ -54,21 +54,14 @@ class AudioDecoder:
 
     def __init__(
         self,
-        source: Union[str, Path, io.RawIOBase, io.BufferedReader, bytes, Tensor],
+        source: str | Path | io.RawIOBase | io.BufferedReader | bytes | Tensor,
         *,
-        stream_index: Optional[int] = None,
-        sample_rate: Optional[int] = None,
-        num_channels: Optional[int] = None,
+        stream_index: int | None = None,
+        sample_rate: int | None = None,
+        num_channels: int | None = None,
     ):
         torch._C._log_api_usage_once("torchcodec.decoders.AudioDecoder")
         self._decoder = create_decoder(source=source, seek_mode="approximate")
-
-        core.add_audio_stream(
-            self._decoder,
-            stream_index=stream_index,
-            sample_rate=sample_rate,
-            num_channels=num_channels,
-        )
 
         container_metadata = core.get_container_metadata(self._decoder)
         self.stream_index = (
@@ -81,11 +74,26 @@ class AudioDecoder:
                 "The best audio stream is unknown and there is no specified stream. "
                 + ERROR_REPORTING_INSTRUCTIONS
             )
+        if self.stream_index >= len(container_metadata.streams):
+            raise ValueError(
+                f"The stream at index {stream_index} is not a valid stream."
+            )
+
         self.metadata = container_metadata.streams[self.stream_index]
-        assert isinstance(self.metadata, core.AudioStreamMetadata)  # mypy
+        if not isinstance(self.metadata, core._metadata.AudioStreamMetadata):
+            raise ValueError(
+                f"The stream at index {stream_index} is not an audio stream. "
+            )
 
         self._desired_sample_rate = (
             sample_rate if sample_rate is not None else self.metadata.sample_rate
+        )
+
+        core.add_audio_stream(
+            self._decoder,
+            stream_index=stream_index,
+            sample_rate=sample_rate,
+            num_channels=num_channels,
         )
 
     def get_all_samples(self) -> AudioSamples:
@@ -100,7 +108,7 @@ class AudioDecoder:
         return self.get_samples_played_in_range()
 
     def get_samples_played_in_range(
-        self, start_seconds: float = 0.0, stop_seconds: Optional[float] = None
+        self, start_seconds: float = 0.0, stop_seconds: float | None = None
     ) -> AudioSamples:
         """Returns audio samples in the given range.
 

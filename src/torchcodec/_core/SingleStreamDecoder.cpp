@@ -100,6 +100,26 @@ void SingleStreamDecoder::initializeDecoder() {
       "Failed to find stream info: ",
       getFFMPEGErrorStringFromErrorCode(status));
 
+  if (formatContext_->duration > 0) {
+    AVRational defaultTimeBase{1, AV_TIME_BASE};
+    containerMetadata_.durationSecondsFromHeader =
+        ptsToSeconds(formatContext_->duration, defaultTimeBase);
+  }
+
+  if (formatContext_->bit_rate > 0) {
+    containerMetadata_.bitRate = formatContext_->bit_rate;
+  }
+
+  int bestVideoStream = getBestStreamIndex(AVMEDIA_TYPE_VIDEO);
+  if (bestVideoStream >= 0) {
+    containerMetadata_.bestVideoStreamIndex = bestVideoStream;
+  }
+
+  int bestAudioStream = getBestStreamIndex(AVMEDIA_TYPE_AUDIO);
+  if (bestAudioStream >= 0) {
+    containerMetadata_.bestAudioStreamIndex = bestAudioStream;
+  }
+
   for (unsigned int i = 0; i < formatContext_->nb_streams; i++) {
     AVStream* avStream = formatContext_->streams[i];
     StreamMetadata streamMetadata;
@@ -110,8 +130,8 @@ void SingleStreamDecoder::initializeDecoder() {
             ", does not match AVStream's index, " +
             std::to_string(avStream->index) + ".");
     streamMetadata.streamIndex = i;
-    streamMetadata.mediaType = avStream->codecpar->codec_type;
     streamMetadata.codecName = avcodec_get_name(avStream->codecpar->codec_id);
+    streamMetadata.mediaType = avStream->codecpar->codec_type;
     streamMetadata.bitRate = avStream->codecpar->bit_rate;
 
     int64_t frameCount = avStream->nb_frames;
@@ -133,10 +153,18 @@ void SingleStreamDecoder::initializeDecoder() {
       if (fps > 0) {
         streamMetadata.averageFpsFromHeader = fps;
       }
+      streamMetadata.width = avStream->codecpar->width;
+      streamMetadata.height = avStream->codecpar->height;
+      streamMetadata.sampleAspectRatio =
+          avStream->codecpar->sample_aspect_ratio;
       containerMetadata_.numVideoStreams++;
     } else if (avStream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
       AVSampleFormat format =
           static_cast<AVSampleFormat>(avStream->codecpar->format);
+      streamMetadata.sampleRate =
+          static_cast<int64_t>(avStream->codecpar->sample_rate);
+      streamMetadata.numChannels =
+          static_cast<int64_t>(getNumChannels(avStream->codecpar));
 
       // If the AVSampleFormat is not recognized, we get back nullptr. We have
       // to make sure we don't initialize a std::string with nullptr. There's
@@ -149,27 +177,10 @@ void SingleStreamDecoder::initializeDecoder() {
       containerMetadata_.numAudioStreams++;
     }
 
+    streamMetadata.durationSecondsFromContainer =
+        containerMetadata_.durationSecondsFromHeader;
+
     containerMetadata_.allStreamMetadata.push_back(streamMetadata);
-  }
-
-  if (formatContext_->duration > 0) {
-    AVRational defaultTimeBase{1, AV_TIME_BASE};
-    containerMetadata_.durationSecondsFromHeader =
-        ptsToSeconds(formatContext_->duration, defaultTimeBase);
-  }
-
-  if (formatContext_->bit_rate > 0) {
-    containerMetadata_.bitRate = formatContext_->bit_rate;
-  }
-
-  int bestVideoStream = getBestStreamIndex(AVMEDIA_TYPE_VIDEO);
-  if (bestVideoStream >= 0) {
-    containerMetadata_.bestVideoStreamIndex = bestVideoStream;
-  }
-
-  int bestAudioStream = getBestStreamIndex(AVMEDIA_TYPE_AUDIO);
-  if (bestAudioStream >= 0) {
-    containerMetadata_.bestAudioStreamIndex = bestAudioStream;
   }
 
   if (seekMode_ == SeekMode::exact) {
@@ -287,6 +298,14 @@ void SingleStreamDecoder::scanFileAndUpdateMetadataAndIndex() {
 
     streamMetadata.numFramesFromContent =
         streamInfos_[streamIndex].allFrames.size();
+
+    // This ensures that we are robust in handling cases where
+    // we are decoding in exact mode and numFrames is 0. The current metadata
+    // validation logic assumes that these values should not be None
+    if (streamMetadata.numFramesFromContent.value() == 0) {
+      streamMetadata.beginStreamPtsFromContent = 0;
+      streamMetadata.endStreamPtsFromContent = 0;
+    }
 
     if (streamMetadata.beginStreamPtsFromContent.has_value()) {
       streamMetadata.beginStreamPtsSecondsFromContent = ptsToSeconds(
@@ -516,11 +535,6 @@ void SingleStreamDecoder::addVideoStream(
   auto& streamInfo = streamInfos_[activeStreamIndex_];
   streamInfo.videoStreamOptions = videoStreamOptions;
 
-  streamMetadata.width = streamInfo.codecContext->width;
-  streamMetadata.height = streamInfo.codecContext->height;
-  streamMetadata.sampleAspectRatio =
-      streamInfo.codecContext->sample_aspect_ratio;
-
   if (seekMode_ == SeekMode::custom_frame_mappings) {
     TORCH_CHECK(
         customFrameMappings.has_value(),
@@ -531,12 +545,14 @@ void SingleStreamDecoder::addVideoStream(
 
   metadataDims_ =
       FrameDims(streamMetadata.height.value(), streamMetadata.width.value());
+  FrameDims currInputDims = metadataDims_;
   for (auto& transform : transforms) {
     TORCH_CHECK(transform != nullptr, "Transforms should never be nullptr!");
     if (transform->getOutputFrameDims().has_value()) {
       resizedOutputDims_ = transform->getOutputFrameDims().value();
     }
-    transform->validate(streamMetadata);
+    transform->validate(currInputDims);
+    currInputDims = resizedOutputDims_.value_or(metadataDims_);
 
     // Note that we are claiming ownership of the transform objects passed in to
     // us.
@@ -565,13 +581,6 @@ void SingleStreamDecoder::addAudioStream(
 
   auto& streamInfo = streamInfos_[activeStreamIndex_];
   streamInfo.audioStreamOptions = audioStreamOptions;
-
-  auto& streamMetadata =
-      containerMetadata_.allStreamMetadata[activeStreamIndex_];
-  streamMetadata.sampleRate =
-      static_cast<int64_t>(streamInfo.codecContext->sample_rate);
-  streamMetadata.numChannels =
-      static_cast<int64_t>(getNumChannels(streamInfo.codecContext));
 
   // FFmpeg docs say that the decoder will try to decode natively in this
   // format, if it can. Docs don't say what the decoder does when it doesn't
@@ -1032,7 +1041,7 @@ AudioFramesOutput SingleStreamDecoder::getFramesPlayedInRangeAudio(
         firstFramePtsSeconds = frameOutput.ptsSeconds;
       }
       frames.push_back(frameOutput.data);
-    } catch (const EndOfFileException& e) {
+    } catch (const EndOfFileException&) {
       finished = true;
     }
 
@@ -1081,32 +1090,10 @@ void SingleStreamDecoder::setCursor(int64_t pts) {
   cursor_ = pts;
 }
 
-/*
-Videos have I frames and non-I frames (P and B frames). Non-I frames need data
-from the previous I frame to be decoded.
-
-Imagine the cursor is at a random frame with PTS=lastDecodedAvFramePts (x for
-brevity) and we wish to seek to a user-specified PTS=y.
-
-If y < x, we don't have a choice but to seek backwards to the highest I frame
-before y.
-
-If y > x, we have two choices:
-
-1. We could keep decoding forward until we hit y. Illustrated below:
-
-I    P     P    P    I    P    P    P    I    P    P    I    P    P    I    P
-                          x         y
-
-2. We could try to jump to an I frame between x and y (indicated by j below).
-And then start decoding until we encounter y. Illustrated below:
-
-I    P     P    P    I    P    P    P    I    P    P    I    P    P    I    P
-                          x              j         y
-
-(2) is more efficient than (1) if there is an I frame between x and y.
-*/
 bool SingleStreamDecoder::canWeAvoidSeeking() const {
+  // Returns true if we can avoid seeking in the AVFormatContext based on
+  // heuristics that rely on the target cursor_ and the last decoded frame.
+  // Seeking is expensive, so we try to avoid it when possible.
   const StreamInfo& streamInfo = streamInfos_.at(activeStreamIndex_);
   if (streamInfo.avMediaType == AVMEDIA_TYPE_AUDIO) {
     // For audio, we only need to seek if a backwards seek was requested
@@ -1129,13 +1116,34 @@ bool SingleStreamDecoder::canWeAvoidSeeking() const {
     // implement caching.
     return false;
   }
-  // We are seeking forwards.
-  // We can only skip a seek if both lastDecodedAvFramePts and
-  // cursor_ share the same keyframe.
-  int lastDecodedAvFrameIndex = getKeyFrameIndexForPts(lastDecodedAvFramePts_);
-  int targetKeyFrameIndex = getKeyFrameIndexForPts(cursor_);
-  return lastDecodedAvFrameIndex >= 0 && targetKeyFrameIndex >= 0 &&
-      lastDecodedAvFrameIndex == targetKeyFrameIndex;
+  // We are seeking forwards. We can skip a seek if both the last decoded frame
+  // and cursor_ share the same keyframe:
+  // Videos have I frames and non-I frames (P and B frames). Non-I frames need
+  // data from the previous I frame to be decoded.
+  //
+  // Imagine the cursor is at a random frame with PTS=lastDecodedAvFramePts (x
+  // for brevity) and we wish to seek to a user-specified PTS=y.
+  //
+  // If y < x, we don't have a choice but to seek backwards to the highest I
+  // frame before y.
+  //
+  // If y > x, we have two choices:
+  //
+  // 1. We could keep decoding forward until we hit y. Illustrated below:
+  //
+  // I    P     P    P    I    P    P    P    I    P    P    I    P
+  //                           x         y
+  //
+  // 2. We could try to jump to an I frame between x and y (indicated by j
+  // below). And then start decoding until we encounter y. Illustrated below:
+  //
+  // I    P     P    P    I    P    P    P    I    P    P    I    P
+  //                           x              j         y
+  // (2) is only more efficient than (1) if there is an I frame between x and y.
+  int lastKeyFrame = getKeyFrameIdentifier(lastDecodedAvFramePts_);
+  int targetKeyFrame = getKeyFrameIdentifier(cursor_);
+  return lastKeyFrame >= 0 && targetKeyFrame >= 0 &&
+      lastKeyFrame == targetKeyFrame;
 }
 
 // This method looks at currentPts and desiredPts and seeks in the
@@ -1352,7 +1360,19 @@ torch::Tensor SingleStreamDecoder::maybePermuteHWC2CHW(
 // PTS <-> INDEX CONVERSIONS
 // --------------------------------------------------------------------------
 
-int SingleStreamDecoder::getKeyFrameIndexForPts(int64_t pts) const {
+int SingleStreamDecoder::getKeyFrameIdentifier(int64_t pts) const {
+  // This function "identifies" a key frame for a given pts value.
+  // We use the term "identifier" rather than "index" because the nature of the
+  // index that is returned depends on various factors:
+  // - If seek_mode is exact, we return the index of the key frame in the
+  //   scanned key-frame vector (streamInfo.keyFrames). So the returned value is
+  //   in [0, num_key_frames).
+  // - If seek_mode is approximate, we use av_index_search_timestamp() which
+  //   may return a value in [0, num_key_frames) like for mkv, but also a value
+  //   in [0, num_frames) like for mp4. It really depends on the container.
+  //
+  //  The range of the "identifier" doesn't matter that much, for now we only
+  //  use it to uniquely identify a key frame in canWeAvoidSeeking().
   const StreamInfo& streamInfo = streamInfos_.at(activeStreamIndex_);
   if (streamInfo.keyFrames.empty()) {
     return av_index_search_timestamp(

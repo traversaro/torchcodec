@@ -881,7 +881,7 @@ class TestVideoEncoder:
                     pytest.mark.slow,
                     pytest.mark.skipif(
                         get_ffmpeg_major_version() == 4
-                        or (IS_WINDOWS and get_ffmpeg_major_version() in (6, 7)),
+                        or (IS_WINDOWS and get_ffmpeg_major_version() >= 6),
                         reason="Codec for webm is not available in this FFmpeg installation.",
                     ),
                 ],
@@ -936,7 +936,7 @@ class TestVideoEncoder:
                     pytest.mark.slow,
                     pytest.mark.skipif(
                         get_ffmpeg_major_version() == 4
-                        or (IS_WINDOWS and get_ffmpeg_major_version() in (6, 7)),
+                        or (IS_WINDOWS and get_ffmpeg_major_version() >= 6),
                         reason="Codec for webm is not available in this FFmpeg installation.",
                     ),
                 ],
@@ -994,7 +994,7 @@ class TestVideoEncoder:
     ):
         ffmpeg_version = get_ffmpeg_major_version()
         if format == "webm" and (
-            ffmpeg_version == 4 or (IS_WINDOWS and ffmpeg_version in (6, 7))
+            ffmpeg_version == 4 or (IS_WINDOWS and ffmpeg_version >= 6)
         ):
             pytest.skip("Codec for webm is not available in this FFmpeg installation.")
 
